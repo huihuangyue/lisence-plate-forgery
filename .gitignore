@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+.conda-env/
+
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+# Environment & secrets
+.env
+local_env.sh
+
+# Runtime outputs (model runs, Docker work directories, generated images)
+runtime/
+trajectories/
+
+# Raw image dataset is local-only; keep the lightweight manifest in Git.
+data/raw/

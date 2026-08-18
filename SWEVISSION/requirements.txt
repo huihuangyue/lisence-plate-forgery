@@ -1,0 +1,14 @@
+# Core agent dependencies
+openai
+jupyter_client
+docker
+
+# Web applications
+flask
+werkzeug
+
+# Image processing
+Pillow
+
+# Evaluation utilities
+regex
