@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
 dist/
 build/
 *.egg
@@ -26,10 +27,31 @@ Thumbs.db
 # Environment & secrets
 .env
 local_env.sh
+local_vlm_env.sh
 
 # Runtime outputs (model runs, Docker work directories, generated images)
 runtime/
 trajectories/
+outputs/
+doc/
+logs/
+audit/
 
-# Raw image dataset is local-only; keep the lightweight manifest in Git.
+# Datasets and generated human/model annotations are local-only. Keep the
+# lightweight data/manifest.csv and src/sticker/annotation_template.csv in Git.
 data/raw/
+data/annotations/
+
+# Downloaded checkpoints are deployed separately. The small ONNX plate-keypoint
+# model under src/shape/models/ is intentionally versioned with the code.
+/models/
+/checkpoints/
+/runs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Local connection notes and interactive-session leftovers
+/ssh
+/:memory:.ses

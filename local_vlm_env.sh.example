@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 本地 Qwen3.5 服务接线。复制为 local_vlm_env.sh 后由操作者显式 source。
+# local_vlm_env.sh 已被 .gitignore 的 local_env.sh 规则之外单独忽略。
+
+export STICKER_AGENT_MODEL="qwen35-2b-local"
+export STICKER_AGENT_BASE_URL="http://127.0.0.1:8000/v1"
+export STICKER_AGENT_API_KEY="EMPTY"
+export STICKER_AGENT_STRUCTURED_OUTPUT="1"
+export STICKER_AGENT_DISABLE_THINKING="1"
+export STICKER_AGENT_MAX_OUTPUT_TOKENS="3072"
+export STICKER_AGENT_ADJUDICATOR_MAX_OUTPUT_TOKENS="1536"
+
+# OCR 等仍读取通用 OpenAI 变量的模块也指向同一服务。
+export OPENAI_MODEL="$STICKER_AGENT_MODEL"
+export OPENAI_BASE_URL="$STICKER_AGENT_BASE_URL"
+export OPENAI_API_KEY="$STICKER_AGENT_API_KEY"
+
+# 避免旧云端配置中的定位模型名覆盖本地服务模型名。
+unset SHAPE_VISION_MODEL
