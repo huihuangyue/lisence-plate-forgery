@@ -1,6 +1,6 @@
-# 车牌整体贴片检测模块
+# 车牌物理变造检测模块
 
-本模块输入第一阶段生成的固定尺寸 `03_rectified.jpg`，输出字符槽候选、证据图、最终标记图、掩膜和结构化报告。当前只处理使用字符贴、矩形底片或磁贴整体覆盖字符，不处理增加或消除笔画。
+本模块输入第一阶段生成的固定尺寸 `03_rectified.jpg`，输出字符槽候选、证据图、最终标记图、掩膜和结构化报告。agent 路线同时处理整字符贴片、增加笔画、消除笔画以及一增一消的复合局部修改；local 路线仍只是整字符贴片的确定性基线。
 
 ## 两种运行方式
 
@@ -58,7 +58,7 @@ python -m src.sticker.run outputs/shape_local_first10 --method local --limit 10
 
 云端模型只能选择本地生成的 `C1..C8` 或 `C1..C7` 候选，最终坐标由确定性代码导出。API 响应按输入图、提示词和模型哈希缓存在输出根目录的 `.api_cache` 中，以支持断点重跑；可用 `--no-cache` 禁用。
 
-`report.json` 的 `tampered_characters` 只包含最终通过物理门槛的贴片字符。例如第5位可读为 `6` 时输出：
+`report.json` 的 `tampered_characters` 只包含最终通过门控的高风险字符。加/消笔画结果同时给出变造类型、可能原字符、目标区域和转换假设：
 
 ```json
 {
@@ -66,16 +66,30 @@ python -m src.sticker.run outputs/shape_local_first10 --method local --limit 10
     {
       "candidate_id": "C5",
       "slot": 5,
-      "character": "6",
+      "character": "E",
       "recognition_status": "cross_review_consensus",
       "bbox": [550, 18, 649, 244],
-      "confidence_level": "high"
+      "confidence_level": "high",
+      "tamper_types": ["added_stroke"],
+      "possible_original_characters": ["F"],
+      "stroke_regions": ["bottom"],
+      "stroke_hypotheses": [
+        {"observed_character": "E", "possible_original": "F", "tamper_type": "added_stroke", "edit_count": 1, "operation": "add_bottom", "regions": ["bottom"], "priority": "tier1"}
+      ]
     }
   ]
 }
 ```
 
-`character` 是贴片后照片中可见的字符，不推断被遮住的原字符。无法可靠读出时保留 `null` 并给出 `recognition_status`，不会猜字。橙框另列在 `uncertain_characters`，不会混入 `tampered_characters`。
+`character` 是照片中当前可见字符。`possible_original_characters` 是转换表和物理证据共同约束后的候选，不等于已经恢复原号牌。无法可靠读出时保留 `null`。橙框另列在 `uncertain_characters`，不会混入 `tampered_characters`。
+
+agent 默认使用 `high_recall` 决策配置，可显式切换：
+
+```bash
+export STICKER_AGENT_DECISION_PROFILE=high_recall  # 或 balanced
+```
+
+`high_recall` 对一级笔画转换使用较低局部物理门槛，但高风险结果仍要求至少两个模型阶段支持；只有字符相似、没有物理响应时不能进入高风险。该配置的工程目标是车牌级召回率不低于95%、查准率尽量保持且底线约70%，目前只是待验证目标，不是已有测量结果。工作点必须在独立人工标注集上选择。
 
 证据页综合使用原始图、CLAHE 局部对比度、反色 CLAHE、Scharr/Canny、多尺度顶帽与黑帽、局部 Lab 照明平面残差、边界两侧 CIEDE2000 色差和亮暗成对边缘。v6 不要求矩形完整闭合：两条与号牌轴平行、闭合度较低的残边也可进入候选，但必须得到材料归属支持。材料归属由两级对照组成：第一级逐行比较候选与同高度左右邻域；第二级逐行比较该字符槽与整牌多数槽位。第二级保留绿牌上浅下绿的天然分布以及随高度变化的照明，因此相邻字符共用一条贴片边时，只有真正偏离整牌背景的槽位获得高归属分。首末槽只允许使用朝向号牌内部的局部对照，并要求整牌参考确认，避免号牌外部和相邻贴片污染。
 
@@ -83,13 +97,13 @@ python -m src.sticker.run outputs/shape_local_first10 --method local --limit 10
 
 ## 当前限制
 
-- 本地融合阈值和模型结论尚未使用真实贴片掩膜校准；输出是研究筛查结果，不是正确概率或司法结论。
+- 加/消笔画局部阈值尚未用分类型真实掩膜校准；输出是研究筛查结果，不是正确概率或司法结论。
 - 字符槽来自固定物理模板；agent 路线通过多轮观察返回可见字符，本地路线不带 OCR，因此本地结果的 `character` 为 `null`。候选定位和贴片成立条件均不依赖字符识别。
-- 当前门槛优先降低误伤；只有一条可见贴片边、成对竖缝不孤立或没有独立材料差异时仍会拒判。需要真实标注集评估召回损失。
+- 整体贴片沿用 v8 多通路门控；加/消笔画采用“转换候选 + 局部物理异常 + 多阶段模型一致”的独立门控，不要求矩形边界。
 - 单张普通照片只能把厚度和翘边作为弱光影证据。
 - 必须建立真实贴片与困难负样本标注集后，才能报告 precision、recall、字符级 F1 或区域 IoU。
 
-判定协议 v7 严格限制拒判：只有号牌不可见、有效尺寸过小、严重模糊、大面积过曝/欠曝或提取失败时允许输出 `unassessable`。独立车牌 OCR 是可评估性的正向证据：OCR 返回完整、`readable=true` 且字符数与蓝牌7位/绿牌8位一致时，即使本地图像阈值失败也允许继续判断；OCR 失败不能反过来否定本来合格的图像。只要综合质量门为 `assessable`，最终必须输出 `suspicious` 或 `clear`；证据不足或冲突的槽位保留在 `uncertain_candidates`，不得把整牌升级为拒判。
+判定协议 v9 继续严格限制拒判：只有号牌不可见、有效尺寸过小、严重模糊、大面积过曝/欠曝或提取失败时允许输出 `unassessable`。独立车牌 OCR 是可评估性的正向证据：OCR 返回完整、`readable=true` 且字符数与蓝牌7位/绿牌8位一致时，即使本地图像阈值失败也允许继续判断；OCR 失败不能反过来否定本来合格的图像。只要综合质量门为 `assessable`，最终必须输出 `suspicious` 或 `clear`；证据不足或冲突的槽位保留在 `uncertain_candidates`，不得把整牌升级为拒判。
 
 ## 人工标注与评估 harness
 

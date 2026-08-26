@@ -89,6 +89,9 @@ def test_local_qwen_request_uses_strict_json_schema(monkeypatch, tmp_path) -> No
                 "slot_id": "S1",
                 "observed_character": "A",
                 "verdict": "uncertain",
+                "suspected_tamper_types": [],
+                "possible_originals": [],
+                "stroke_regions": [],
                 "geometry_observations": [],
                 "appearance_observations": [],
                 "normal_explanations": [],
@@ -136,6 +139,9 @@ def test_assessment_validation_rejects_wrong_slot_and_incomplete_coverage() -> N
                 "slot_id": "S2",
                 "observed_character": None,
                 "verdict": "uncertain",
+                "suspected_tamper_types": [],
+                "possible_originals": [],
+                "stroke_regions": [],
                 "geometry_observations": [],
                 "appearance_observations": [],
                 "normal_explanations": [],
@@ -318,6 +324,7 @@ def test_agent_call_budget_controls_review_depth(max_calls: int, expected_stages
     harness.model = "fake-model"
     harness.base_url = "https://example.test/v1"
     harness.max_calls_per_image = max_calls
+    harness.decision_profile = "balanced"
     harness.calls = []
 
     def fake_call(

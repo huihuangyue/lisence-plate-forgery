@@ -195,6 +195,21 @@ def _candidate_summary(artifacts: Any, decision: dict[str, Any]) -> list[dict[st
             ),
             "bbox": list(candidate.bbox),
             "confidence_level": "high" if candidate.candidate_id in selected else "medium",
+            "tamper_types": (
+                decision.get("candidate_forgery_types", {}).get(candidate.candidate_id, [])
+                if isinstance(decision.get("candidate_forgery_types"), dict)
+                else []
+            ),
+            "possible_original_characters": (
+                decision.get("candidate_possible_originals", {}).get(candidate.candidate_id, [])
+                if isinstance(decision.get("candidate_possible_originals"), dict)
+                else []
+            ),
+            "stroke_regions": (
+                decision.get("candidate_stroke_regions", {}).get(candidate.candidate_id, [])
+                if isinstance(decision.get("candidate_stroke_regions"), dict)
+                else []
+            ),
             "geometry_score": candidate.geometry_score,
             "appearance_score": candidate.appearance_score,
             "paired_edge_score": candidate.paired_edge_score,
@@ -260,7 +275,9 @@ def analyze_vehicle_image(
     stage_started = time.perf_counter()
     selected = [str(value) for value in decision.get("selected_candidates", [])]
     uncertain = [str(value) for value in decision.get("uncertain_candidates", [])]
-    final_marked, candidate_mask = render_final(rectified, artifacts, selected, uncertain)
+    final_marked, candidate_mask = render_final(
+        rectified, artifacts, selected, uncertain, decision
+    )
     timings["final_render"] = time.perf_counter() - stage_started
 
     images = {
@@ -303,6 +320,12 @@ def analyze_vehicle_image(
             **quality_gate,
         },
         "decision": decision.get("decision", "unassessable"),
+        "tamper_scope": (
+            ["whole_character_overlay", "added_stroke", "removed_stroke", "mixed_stroke_edit"]
+            if sticker_method == "agent"
+            else ["whole_character_overlay"]
+        ),
+        "decision_profile": decision.get("decision_profile"),
         "selected_candidates": selected,
         "uncertain_candidates": uncertain,
         "tampered_characters": character_decision_entries(

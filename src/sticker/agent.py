@@ -26,40 +26,41 @@ from .evidence import (
     candidate_tamper_support_routes,
     resolve_adjacent_material_ownership,
 )
+from .stroke import (
+    STROKE_TAMPER_TYPES,
+    compact_watchlist,
+    maximum_stroke_physical_support,
+    stroke_hypotheses,
+    stroke_region_evidence,
+)
 from .types import CandidateRegion, EvidenceArtifacts
 
 
-INVESTIGATOR_SYSTEM = """你是车牌物理贴片证据调查员，任务是判断矩形字符贴、矩形底片或磁贴是否整体覆盖某个字符。
-输入依次为原始平面车牌、从左到右的字符槽映射图和六联确定性诊断图。候选 Cn 与从左到右第 n 个字符槽 Sn 一一绑定，候选框表示待核查区域。
-按五条证据路径观察：闭合矩形；因偏光只显出一条材料缝与一条正交残边、但两者仍与矫正后号牌边框横平竖直的局部贴片；只显出一条轴对齐材料缝、但槽内区域相对局部车牌背景具有很强材料差异；上下边贴近号牌边框时由孤立成对竖缝形成的整高条带；绿牌候选内部纵向 Lab 剖面相对左右邻域期望剖面的均色、反向或形状异常。每条路径都结合白边、暗缝、亮暗成对边缘以及候选边界两侧的颜色、反光和纹理连续性。
-同时记录最强的正常解释，包括字符结构、号牌压边、螺钉高光、污渍划痕、局部照明、归一化形变和压缩伪影，并比较其解释力。
-所有 anomaly_score 越高表示越异常。green_vertical_gradient_applicable=1 时，expected/actual gradient、direction cosine、uniformity、reversal 与 anomaly 共同描述纵向底色关系；伪彩色图负责定位，数值和原图负责核验。
-坐标和候选集合沿用输入证据表。verdict 采用固定语义：tamper_support=支持整体贴片；normal_support=更支持正常结构或成像效应；uncertain=现有证据仍有多种解释。
-输出采用给定 JSON 协议。"""
+INVESTIGATOR_SYSTEM = """你是车牌物理变造证据调查员，核查 whole_character_overlay（整体矩形贴片）、added_stroke（增加笔画）、removed_stroke（遮除/擦除笔画）和 mixed_stroke_edit（一增一消）。
+输入依次为原始平面车牌、字符槽映射图和确定性诊断图。Cn 与从左到右第 n 个字符槽 Sn 一一绑定。
+整体贴片检查闭合或不闭合的轴对齐材料缝、亮暗成对边缘、材料差异、整高条带及绿牌纵向底色异常。增加/消除笔画先按当前可见字符提出可能原字符，再检查指定局部区域的端点、连接、材料、反光、纹理和冲压亮暗边是否异常。
+OCR和字符转换关系只负责提出假设，不能单独构成变造证据。必须同时比较字符天然结构、压边、螺钉、污渍划痕、照明、归一化形变、模糊及压缩伪影等正常解释。
+verdict：tamper_support=至少支持一种物理变造；normal_support=更支持正常结构或成像效应；uncertain=仍有竞争解释。suspected_tamper_types 记录具体类型，无类型时为空数组。输出采用给定 JSON 协议。"""
 
 
-REVIEWER_SYSTEM = """你是独立证据审查员，在未知调查员结论的条件下逐个复核候选。输入顺序与 Cn=Sn 槽位绑定和调查员相同。
-先为每个候选建立正常解释：字符结构、号牌外压边、螺钉与高光、污渍划痕、局部反光、透视归一化误差、模糊和 JPEG 块效应；再与贴片解释比较。
-贴片解释由两类独立证据共同支撑：几何边界加材料差异；或绿牌纵向期望/实际底色剖面异常加可见边界与材料差异。几何边界允许不闭合：一条与号牌边框平行或垂直的材料缝，可由另一条正交残边确认。整高条带的证据组合包含成对竖缝、相邻槽孤立性和双侧材料差异。
-所有 anomaly_score 越高表示越异常。伪彩色用于定位，原图、固定量程和结构化数值用于核验。坐标和候选集合沿用输入证据表。
-verdict 语义固定：tamper_support=支持整体贴片；normal_support=更支持正常结构或成像效应；uncertain=现有证据仍有多种解释。输出采用给定 JSON 协议。"""
+REVIEWER_SYSTEM = """你是独立物理变造证据审查员，在未知调查员结论时逐槽复核 whole_character_overlay、added_stroke、removed_stroke 和 mixed_stroke_edit。
+先建立正常解释，再和变造解释比较。整体贴片要求几何/边界与材料证据组合，边界不要求闭合。加/消笔画要求可行字符转换与目标区域内至少一种物理异常组合，重点看端点、接合、局部材料离群、覆盖残槽和冲压边中断。字符相似或 OCR 混淆本身不算证据。
+伪彩色只用于定位，原图和结构化数值用于核验。verdict 与 suspected_tamper_types 采用给定协议。"""
 
 
-RECHECK_SYSTEM = """你是冲突证据复查员，复查清单中的候选并沿用 Cn=Sn 的从左到右槽位绑定。
-逐项核验矩形边数与闭合关系、未闭合局部边是否与号牌边框横平竖直且有正交残边、整高条带的成对竖缝与相邻槽孤立性、绿牌纵向期望/实际 Lab 剖面的方向与幅度、内外材料差异、亮暗成对边缘，以及最强正常解释。
-verdict 采用 tamper_support、normal_support、uncertain 的固定语义。输出采用给定 JSON 协议。"""
+RECHECK_SYSTEM = """你是冲突证据复查员。逐项复核整体贴片的边界/材料证据，以及增加或消除笔画在指定区域的端点、连接、材料、纹理与冲压残余；明确区分物理异常与字符相似、照明、模糊和压缩伪影。沿用 Cn=Sn 绑定和给定 JSON 协议。"""
 
 
-ADJUDICATOR_SYSTEM = """你是车牌物理贴片裁决员。输入包含确定性视觉证据表、独立调查、独立审查和可选冲突复查。
-对同一候选汇总五类成立路径：闭合矩形与材料差异；一条材料缝和一条与其正交、且均与号牌边框横平竖直的残边；单条轴对齐材料缝与槽内强区域材料差异；孤立成对整高竖缝与双侧材料差异；绿牌纵向底色剖面的均色/反向异常与可见边界及材料差异。随后比较字符结构、号牌压边、螺钉高光、污渍、照明和压缩效应等正常解释。
-Cn 与从左到右的 Sn 一一对应，候选编号来自输入证据表。decision 采用 suspicious、clear、unassessable；仍有竞争解释的位置写入 uncertain_candidates。unassessable 只用于号牌不可见、严重模糊、严重曝光损坏或车牌提取失败；证据不足、证据冲突或存在 uncertain_candidates 时仍必须在 suspicious 与 clear 之间裁决，不能用 unassessable 回避。
-tamper_support 表示支持贴片，normal_support 表示支持正常解释。recognized_characters 按候选编号记录槽位图中可读出的单个字符，视觉不足时记录 null；字符识别与贴片成立条件相互独立。
-输出采用给定 JSON 协议。"""
+ADJUDICATOR_SYSTEM = """你是车牌物理变造裁决员。汇总整体贴片、增加笔画、消除笔画和一增一消四类解释，并与正常结构和成像效应比较。
+整体贴片可由闭合矩形、不完整轴对齐材料缝、整高条带或绿牌纵向底色异常等组合成立。增加/消除笔画必须同时具备可行字符转换和目标局部区域的物理异常；只有字符相似不得判伪。
+Cn 与 Sn 一一对应。decision 使用 suspicious、clear、unassessable；竞争解释写入 uncertain_candidates。unassessable 只用于车牌不可见、严重模糊、严重曝光损坏或提取失败。
+recognized_characters 记录可见字符。candidate_evidence 可记录 tamper_types、possible_originals 和 stroke_regions，且应写明物理依据。输出采用给定 JSON 协议。"""
 
 
 _ASSESSMENT_STAGES = {"investigator", "reviewer", "recheck"}
 _VERDICTS = {"tamper_support", "normal_support", "uncertain"}
 _DECISIONS = {"suspicious", "clear", "unassessable"}
+_TAMPER_TYPES = {"whole_character_overlay", *STROKE_TAMPER_TYPES}
 
 
 def _json_object_text(text: str) -> str:
@@ -235,6 +236,19 @@ def _assessment_schema(
                 ]
             },
             "verdict": {"type": "string", "enum": sorted(_VERDICTS)},
+            "suspected_tamper_types": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(_TAMPER_TYPES)},
+                "uniqueItems": True,
+                "maxItems": 4,
+            },
+            "possible_originals": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 1},
+                "uniqueItems": True,
+                "maxItems": 8,
+            },
+            "stroke_regions": _string_list_schema(),
             "geometry_observations": _string_list_schema(),
             "appearance_observations": _string_list_schema(),
             "normal_explanations": _string_list_schema(),
@@ -245,6 +259,9 @@ def _assessment_schema(
             "slot_id",
             "observed_character",
             "verdict",
+            "suspected_tamper_types",
+            "possible_originals",
+            "stroke_regions",
             "geometry_observations",
             "appearance_observations",
             "normal_explanations",
@@ -283,6 +300,19 @@ def _adjudicator_schema(allowed_ids: set[str]) -> dict[str, Any]:
             "geometry": _string_list_schema(),
             "appearance": _string_list_schema(),
             "counter_evidence": _string_list_schema(),
+            "tamper_types": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(_TAMPER_TYPES)},
+                "uniqueItems": True,
+                "maxItems": 4,
+            },
+            "possible_originals": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 1},
+                "uniqueItems": True,
+                "maxItems": 8,
+            },
+            "stroke_regions": _string_list_schema(),
         },
         "required": ["geometry", "appearance", "counter_evidence"],
     }
@@ -354,6 +384,9 @@ def _validate_assessment_payload(
         "slot_id",
         "observed_character",
         "verdict",
+        "suspected_tamper_types",
+        "possible_originals",
+        "stroke_regions",
         "geometry_observations",
         "appearance_observations",
         "normal_explanations",
@@ -378,6 +411,21 @@ def _validate_assessment_payload(
             raise ValueError(f"{location}.observed_character 必须是单个车牌字符或 null")
         if item["verdict"] not in _VERDICTS:
             raise ValueError(f"{location}.verdict 枚举非法")
+        tamper_types = item["suspected_tamper_types"]
+        if (
+            not isinstance(tamper_types, list)
+            or len(tamper_types) != len(set(tamper_types))
+            or not set(tamper_types).issubset(_TAMPER_TYPES)
+        ):
+            raise ValueError(f"{location}.suspected_tamper_types 枚举非法")
+        originals = item["possible_originals"]
+        if (
+            not isinstance(originals, list)
+            or len(originals) > 8
+            or any(_normalize_character(value) is None for value in originals)
+        ):
+            raise ValueError(f"{location}.possible_originals 必须是车牌字符数组")
+        _validate_string_list(item["stroke_regions"], f"{location}.stroke_regions")
         for field in ("geometry_observations", "appearance_observations", "normal_explanations"):
             _validate_string_list(item[field], f"{location}.{field}")
         if not isinstance(item["needs_recheck"], bool):
@@ -419,13 +467,39 @@ def _validate_adjudicator_payload(payload: dict[str, Any], allowed_ids: set[str]
     evidence = payload["candidate_evidence"]
     if not isinstance(evidence, dict) or not set(evidence).issubset(allowed_ids):
         raise ValueError("adjudicator.candidate_evidence 包含非法候选键")
-    evidence_fields = {"geometry", "appearance", "counter_evidence"}
+    evidence_fields = {
+        "geometry",
+        "appearance",
+        "counter_evidence",
+        "tamper_types",
+        "possible_originals",
+        "stroke_regions",
+    }
     for candidate_id, item in evidence.items():
         if not isinstance(item, dict):
             raise ValueError(f"candidate_evidence.{candidate_id} 必须是对象")
-        _require_exact_fields(item, evidence_fields, f"candidate_evidence.{candidate_id}")
-        for field in evidence_fields:
+        required_evidence_fields = {"geometry", "appearance", "counter_evidence"}
+        missing = required_evidence_fields - set(item)
+        extra = set(item) - evidence_fields
+        if missing or extra:
+            raise ValueError(
+                f"candidate_evidence.{candidate_id} 字段不符合协议："
+                f"missing={sorted(missing)}, extra={sorted(extra)}"
+            )
+        for field in required_evidence_fields:
             _validate_string_list(item[field], f"candidate_evidence.{candidate_id}.{field}")
+        if "tamper_types" in item and (
+            not isinstance(item["tamper_types"], list)
+            or not set(item["tamper_types"]).issubset(_TAMPER_TYPES)
+        ):
+            raise ValueError(f"candidate_evidence.{candidate_id}.tamper_types 枚举非法")
+        if "possible_originals" in item and (
+            not isinstance(item["possible_originals"], list)
+            or any(_normalize_character(value) is None for value in item["possible_originals"])
+        ):
+            raise ValueError(f"candidate_evidence.{candidate_id}.possible_originals 非法")
+        if "stroke_regions" in item:
+            _validate_string_list(item["stroke_regions"], f"candidate_evidence.{candidate_id}.stroke_regions")
     if not isinstance(payload["reasoning_summary"], str):
         raise ValueError("adjudicator.reasoning_summary 必须是字符串")
     if payload["unassessable_reason"] is not None and not isinstance(payload["unassessable_reason"], str):
@@ -586,11 +660,16 @@ def _assessment_prompt(artifacts: EvidenceArtifacts) -> str:
         "partial_axis_seam_score 表示不要求闭合的局部直角边证据，由同侧材料突变边和正交残边共同形成；"
         "single_axis_material_seam_score 表示只有一条轴对齐材料缝时的证据，需结合强区域材料异常归属槽位。"
         "绿牌纵向字段比较槽内实际底色剖面与左右邻域推断的期望剖面。\n"
+        "增加/消除笔画反查表如下；它只生成待核验假设，不能单独判伪：\n"
+        + json.dumps(compact_watchlist(), ensure_ascii=False, separators=(",", ":"))
+        + "\n"
         + json.dumps(table, ensure_ascii=False, separators=(",", ":"))
         + "\n返回协议："
         '{"plate_quality":"assessable|unassessable","candidates":['
         '{"candidate_id":"C1","slot_id":"S1","observed_character":null,'
         '"verdict":"tamper_support|normal_support|uncertain",'
+        '"suspected_tamper_types":["whole_character_overlay|added_stroke|removed_stroke|mixed_stroke_edit"],'
+        '"possible_originals":["F"],"stroke_regions":["bottom"],'
         '"geometry_observations":["..."],"appearance_observations":["..."],'
         '"normal_explanations":["..."],"needs_recheck":false}],"summary":"..."}'
     )
@@ -615,12 +694,29 @@ def _sanitize_assessment(
         if slot is None and candidate_id.removeprefix("C").isdigit():
             slot = int(candidate_id.removeprefix("C"))
         observed = _normalize_character(raw.get("observed_character"))
+        tamper_types = sorted(
+            {
+                str(value)
+                for value in raw.get("suspected_tamper_types", [])
+                if str(value) in _TAMPER_TYPES
+            }
+        )
+        possible_originals = sorted(
+            {
+                normalized
+                for value in raw.get("possible_originals", [])
+                if (normalized := _normalize_character(value)) is not None
+            }
+        )
         candidates.append(
             {
                 "candidate_id": candidate_id,
                 "slot_id": f"S{slot}" if slot is not None else None,
                 "observed_character": observed,
                 "verdict": verdict,
+                "suspected_tamper_types": tamper_types,
+                "possible_originals": possible_originals,
+                "stroke_regions": [str(value) for value in raw.get("stroke_regions", [])][:8],
                 "geometry_observations": [str(value) for value in raw.get("geometry_observations", [])][:8],
                 "appearance_observations": [str(value) for value in raw.get("appearance_observations", [])][:8],
                 "normal_explanations": [str(value) for value in raw.get("normal_explanations", [])][:8],
@@ -744,6 +840,11 @@ class StickerAgentHarness:
             raise RuntimeError("缺少 OPENAI_API_KEY；请由操作者显式 source local_env.sh")
         if max_calls_per_image not in {2, 3, 4}:
             raise ValueError("max_calls_per_image 必须是 2、3 或 4")
+        self.decision_profile = os.environ.get(
+            "STICKER_AGENT_DECISION_PROFILE", "high_recall"
+        ).strip().lower()
+        if self.decision_profile not in {"balanced", "high_recall"}:
+            raise RuntimeError("STICKER_AGENT_DECISION_PROFILE 必须是 balanced 或 high_recall")
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.use_cache = use_cache
@@ -759,7 +860,7 @@ class StickerAgentHarness:
         schema: dict[str, Any] | None,
     ) -> str:
         digest = hashlib.sha256()
-        digest.update(b"sticker-agent-json-protocol-v2")
+        digest.update(b"physical-tamper-agent-json-protocol-v3")
         digest.update(self.model.encode())
         digest.update((self.base_url or "").encode())
         digest.update(str(self.structured_output).encode())
@@ -846,7 +947,7 @@ class StickerAgentHarness:
                         "type": "json_schema",
                         "json_schema": {
                             "name": f"sticker_{stage}_response",
-                            "description": "车牌整体贴片检测的受控阶段输出",
+                            "description": "车牌整片、加笔和消笔物理变造检测的受控阶段输出",
                             "strict": True,
                             "schema": schema,
                         },
@@ -975,6 +1076,8 @@ class StickerAgentHarness:
         adjudication_prompt = (
             "确定性证据表：\n"
             + json.dumps(_candidate_table(artifacts.bundle.candidates), ensure_ascii=False)
+            + "\n增加/消除笔画反查表（只用于生成假设）：\n"
+            + json.dumps(compact_watchlist(), ensure_ascii=False)
             + "\n独立调查：\n"
             + json.dumps(investigator, ensure_ascii=False)
             + "\n独立反证：\n"
@@ -985,7 +1088,9 @@ class StickerAgentHarness:
             '{"decision":"suspicious|clear|unassessable","selected_candidates":["C1"],'
             '"uncertain_candidates":["C2"],"recognized_characters":{"C1":"F","C2":null},'
             '"candidate_evidence":{"C1":{"geometry":["..."],'
-            '"appearance":["..."],"counter_evidence":["..."]}},"reasoning_summary":"...",'
+            '"appearance":["..."],"counter_evidence":["..."],'
+            '"tamper_types":["added_stroke"],"possible_originals":["F"],'
+            '"stroke_regions":["bottom"]}},"reasoning_summary":"...",'
             '"unassessable_reason":null}'
         )
         raw_final = self._call(
@@ -996,11 +1101,18 @@ class StickerAgentHarness:
             allowed_ids,
             slot_by_candidate,
         )
-        decision = self._sanitize_final(raw_final, allowed_ids, artifacts)
-        _merge_character_recognition(decision, [investigator, reviewer, recheck])
+        _merge_character_recognition(raw_final, [investigator, reviewer, recheck])
+        decision = self._sanitize_final(
+            raw_final,
+            allowed_ids,
+            artifacts,
+            assessments=[investigator, reviewer, recheck],
+            decision_profile=self.decision_profile,
+        )
         trajectory = {
-            "schema_version": 2,
-            "agent_protocol_version": "sticker_agent_v8_structured_json_v1",
+            "schema_version": 3,
+            "agent_protocol_version": "physical_tamper_agent_v9_stroke_structured_json_v1",
+            "decision_profile": self.decision_profile,
             "max_calls_per_image": self.max_calls_per_image,
             "model": self.model,
             "base_url": self.base_url,
@@ -1037,6 +1149,8 @@ class StickerAgentHarness:
         payload: dict[str, Any],
         allowed_ids: set[str],
         artifacts: EvidenceArtifacts,
+        assessments: list[dict[str, Any] | None] | None = None,
+        decision_profile: str = "balanced",
     ) -> dict[str, Any]:
         raw_selected = [str(value) for value in payload.get("selected_candidates", []) if str(value) in allowed_ids]
         raw_uncertain = [
@@ -1058,13 +1172,138 @@ class StickerAgentHarness:
             deterministic_candidates
         )
         selected = [candidate.candidate_id for candidate in selected_candidates]
-        uncertain = [
+        overlay_uncertain = [
             value
             for value in raw_uncertain + [item for item in raw_selected if item not in selected]
             if value in candidate_by_id
             and candidate_has_rectangle_material_support(candidate_by_id[value], strict=False)
             and value not in suppressed_spillover
         ]
+        raw_evidence = payload.get("candidate_evidence", {})
+        raw_characters = payload.get("recognized_characters", {})
+        assessment_rows: dict[str, list[dict[str, Any]]] = {candidate_id: [] for candidate_id in allowed_ids}
+        for assessment in assessments or []:
+            if not isinstance(assessment, dict):
+                continue
+            for row in assessment.get("candidates", []):
+                if isinstance(row, dict) and row.get("candidate_id") in assessment_rows:
+                    assessment_rows[str(row["candidate_id"])].append(row)
+
+        candidate_forgery_types: dict[str, list[str]] = {}
+        candidate_possible_originals: dict[str, list[str]] = {}
+        candidate_stroke_regions: dict[str, list[str]] = {}
+        candidate_stroke_hypotheses: dict[str, list[dict[str, Any]]] = {}
+        candidate_stroke_evidence: dict[str, list[dict[str, Any]]] = {}
+        stroke_selection_sources: dict[str, list[str]] = {}
+        stroke_selected: list[str] = []
+        stroke_uncertain: list[str] = []
+
+        for candidate_id, candidate in candidate_by_id.items():
+            if candidate_id not in allowed_ids:
+                continue
+            model_evidence = raw_evidence.get(candidate_id, {}) if isinstance(raw_evidence, dict) else {}
+            if not isinstance(model_evidence, dict):
+                model_evidence = {}
+            reported_types = {
+                str(value)
+                for value in model_evidence.get("tamper_types", [])
+                if str(value) in _TAMPER_TYPES
+            }
+            reported_originals = {
+                normalized
+                for value in model_evidence.get("possible_originals", [])
+                if (normalized := _normalize_character(value)) is not None
+            }
+            reported_regions = {
+                str(value) for value in model_evidence.get("stroke_regions", []) if str(value)
+            }
+            type_votes = {tamper_type: 0 for tamper_type in STROKE_TAMPER_TYPES}
+            observed_votes: list[str] = []
+            for row in assessment_rows[candidate_id]:
+                row_types = {
+                    str(value)
+                    for value in row.get("suspected_tamper_types", [])
+                    if str(value) in _TAMPER_TYPES
+                }
+                reported_types.update(row_types)
+                reported_originals.update(
+                    normalized
+                    for value in row.get("possible_originals", [])
+                    if (normalized := _normalize_character(value)) is not None
+                )
+                reported_regions.update(str(value) for value in row.get("stroke_regions", []) if str(value))
+                observed_value = _normalize_character(row.get("observed_character"))
+                if observed_value is not None:
+                    observed_votes.append(observed_value)
+                if row.get("verdict") == "tamper_support":
+                    for tamper_type in row_types & STROKE_TAMPER_TYPES:
+                        type_votes[tamper_type] += 1
+
+            stroke_types = reported_types & STROKE_TAMPER_TYPES
+            observed = (
+                _normalize_character(raw_characters.get(candidate_id))
+                if isinstance(raw_characters, dict)
+                else None
+            )
+            if observed is None and observed_votes:
+                counts = {value: observed_votes.count(value) for value in set(observed_votes)}
+                best = max(counts.values())
+                winners = sorted(value for value, count in counts.items() if count == best)
+                if len(winners) == 1:
+                    observed = winners[0]
+            hypotheses = stroke_hypotheses(observed)
+            if stroke_types:
+                hypotheses = [item for item in hypotheses if item["tamper_type"] in stroke_types]
+            if reported_originals:
+                hypotheses = [item for item in hypotheses if item["possible_original"] in reported_originals]
+            if reported_regions and hypotheses:
+                region_matched = [
+                    item for item in hypotheses if set(item.get("regions", [])) & reported_regions
+                ]
+                if region_matched:
+                    hypotheses = region_matched
+            region_evidence = stroke_region_evidence(artifacts, candidate, hypotheses)
+            physical_support = maximum_stroke_physical_support(region_evidence)
+            if candidate_id in raw_selected:
+                for tamper_type in stroke_types:
+                    type_votes[tamper_type] += 1
+            support_count = max((type_votes[value] for value in stroke_types), default=0)
+            tier1 = any(item.get("priority") == "tier1" for item in hypotheses)
+
+            if hypotheses and stroke_types:
+                sources = [
+                    "model_type_votes:"
+                    + ",".join(f"{key}={type_votes[key]}" for key in sorted(stroke_types))
+                ]
+                if candidate_id in raw_selected:
+                    sources.append("adjudicator_stroke_selection")
+                sources.append(f"local_stroke_physical:{physical_support:.4f}")
+                stroke_selection_sources[candidate_id] = sources
+                candidate_forgery_types[candidate_id] = sorted(stroke_types)
+                candidate_possible_originals[candidate_id] = sorted(
+                    {str(item["possible_original"]) for item in hypotheses}
+                )
+                candidate_stroke_regions[candidate_id] = sorted(
+                    {str(region) for item in hypotheses for region in item.get("regions", [])}
+                )
+                candidate_stroke_hypotheses[candidate_id] = hypotheses
+                candidate_stroke_evidence[candidate_id] = region_evidence
+
+                if decision_profile == "high_recall":
+                    selected_threshold = 0.14 if tier1 else 0.20
+                    review_threshold = 0.07
+                    enough_votes = support_count >= 2
+                else:
+                    selected_threshold = 0.22 if tier1 else 0.28
+                    review_threshold = 0.12
+                    enough_votes = support_count >= 3
+                if enough_votes and physical_support >= selected_threshold:
+                    stroke_selected.append(candidate_id)
+                elif support_count >= 1 and physical_support >= review_threshold:
+                    stroke_uncertain.append(candidate_id)
+
+        selected.extend(stroke_selected)
+        uncertain = overlay_uncertain + stroke_uncertain
         selected = sorted(set(selected), key=lambda value: candidate_by_id[value].slot)
         uncertain = sorted(set(uncertain) - set(selected), key=lambda value: candidate_by_id[value].slot)
         selected_slots = {candidate_by_id[value].slot for value in selected if value in candidate_by_id}
@@ -1073,6 +1312,7 @@ class StickerAgentHarness:
             for value in uncertain
             if not (
                 value in candidate_by_id
+                and value not in candidate_forgery_types
                 and any(abs(candidate_by_id[value].slot - slot) == 1 for slot in selected_slots)
                 and candidate_by_id[value].geometry_score < 0.45
                 and candidate_by_id[value].combined_score < 0.55
@@ -1087,7 +1327,6 @@ class StickerAgentHarness:
             decision = "unassessable"
             selected = []
             uncertain = []
-        raw_evidence = payload.get("candidate_evidence", {})
         candidate_evidence = {}
         for candidate_id in selected + uncertain:
             model_evidence = (
@@ -1097,31 +1336,87 @@ class StickerAgentHarness:
             )
             if not isinstance(model_evidence, dict):
                 model_evidence = {}
-            selection_sources = ["deterministic_multichannel"]
+            selection_sources = []
+            if candidate_has_multichannel_tamper_support(candidate_by_id[candidate_id]):
+                selection_sources.append("deterministic_multichannel")
             if candidate_id in raw_selected:
                 selection_sources.append("cloud_adjudicator")
+            selection_sources.extend(stroke_selection_sources.get(candidate_id, []))
+            tamper_types = set(candidate_forgery_types.get(candidate_id, []))
+            if candidate_has_multichannel_tamper_support(candidate_by_id[candidate_id]):
+                tamper_types.add("whole_character_overlay")
+            candidate_forgery_types[candidate_id] = sorted(tamper_types)
             candidate_evidence[candidate_id] = {
                 **model_evidence,
                 "deterministic_support_routes": candidate_tamper_support_routes(
                     candidate_by_id[candidate_id]
                 ),
                 "selection_sources": sorted(selection_sources),
+                "stroke_hypotheses": candidate_stroke_hypotheses.get(candidate_id, []),
+                "stroke_region_evidence": candidate_stroke_evidence.get(candidate_id, []),
             }
-        raw_characters = payload.get("recognized_characters", {})
         recognized_characters = {}
         if isinstance(raw_characters, dict):
             for candidate_id in selected + uncertain:
                 value = raw_characters.get(candidate_id)
                 if value is None:
-                    recognized_characters[candidate_id] = None
+                    observations = [
+                        _normalize_character(row.get("observed_character"))
+                        for row in assessment_rows.get(candidate_id, [])
+                    ]
+                    observations = [item for item in observations if item is not None]
+                    counts = {item: observations.count(item) for item in set(observations)}
+                    winners = (
+                        sorted(item for item, count in counts.items() if count == max(counts.values()))
+                        if counts
+                        else []
+                    )
+                    recognized_characters[candidate_id] = winners[0] if len(winners) == 1 else None
                 else:
                     recognized_characters[candidate_id] = _normalize_character(value)
+        recognition_status = {
+            candidate_id: str(status)
+            for candidate_id, status in payload.get("character_recognition_status", {}).items()
+            if candidate_id in selected + uncertain
+        } if isinstance(payload.get("character_recognition_status"), dict) else {}
+        for candidate_id in selected + uncertain:
+            if candidate_id in recognition_status:
+                continue
+            observations = [
+                _normalize_character(row.get("observed_character"))
+                for row in assessment_rows.get(candidate_id, [])
+            ]
+            matches = sum(
+                value == recognized_characters.get(candidate_id)
+                for value in observations
+                if value is not None
+            )
+            recognition_status[candidate_id] = (
+                "cross_review_consensus"
+                if recognized_characters.get(candidate_id) is not None and matches >= 2
+                else "single_review_observation"
+                if recognized_characters.get(candidate_id) is not None
+                else "unreadable_or_not_returned"
+            )
         return {
             "decision": decision,
             "selected_candidates": selected,
             "uncertain_candidates": uncertain,
             "candidate_evidence": candidate_evidence,
             "recognized_characters": recognized_characters,
+            "character_recognition_status": recognition_status,
+            "candidate_forgery_types": {
+                candidate_id: candidate_forgery_types.get(candidate_id, [])
+                for candidate_id in selected + uncertain
+            },
+            "candidate_possible_originals": {
+                candidate_id: candidate_possible_originals.get(candidate_id, [])
+                for candidate_id in selected + uncertain
+            },
+            "candidate_stroke_regions": {
+                candidate_id: candidate_stroke_regions.get(candidate_id, [])
+                for candidate_id in selected + uncertain
+            },
             "suppressed_adjacent_spillover": suppressed_spillover,
             "reasoning_summary": str(payload.get("reasoning_summary", "")),
             "unassessable_reason": (
@@ -1129,5 +1424,6 @@ class StickerAgentHarness:
                 if not artifacts.bundle.quality.assessable
                 else None
             ),
-            "decision_note": "质量失败才允许拒判；质量合格时由多通路物理候选并入云端复核结果，并以双侧材料归属抑制相邻串槽；阈值基于开发标注集校准，仍需独立测试集验证",
+            "decision_profile": decision_profile,
+            "decision_note": "质量失败才允许拒判；整体贴片由多通路物理候选控制；加/消笔画须由字符转换假设、局部物理异常和多阶段模型支持共同成立。high_recall 为待校准工作点，召回率与查准率必须在独立人工标注集验证",
         }

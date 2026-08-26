@@ -57,6 +57,29 @@ def character_decision_entries(
                 "recognition_status": status,
                 "bbox": list(candidate.bbox),
                 "confidence_level": confidence_level,
+                "tamper_types": (
+                    decision.get("candidate_forgery_types", {}).get(candidate.candidate_id, [])
+                    if isinstance(decision.get("candidate_forgery_types"), dict)
+                    else []
+                ),
+                "possible_original_characters": (
+                    decision.get("candidate_possible_originals", {}).get(candidate.candidate_id, [])
+                    if isinstance(decision.get("candidate_possible_originals"), dict)
+                    else []
+                ),
+                "stroke_regions": (
+                    decision.get("candidate_stroke_regions", {}).get(candidate.candidate_id, [])
+                    if isinstance(decision.get("candidate_stroke_regions"), dict)
+                    else []
+                ),
+                "stroke_hypotheses": (
+                    decision.get("candidate_evidence", {})
+                    .get(candidate.candidate_id, {})
+                    .get("stroke_hypotheses", [])
+                    if isinstance(decision.get("candidate_evidence"), dict)
+                    and isinstance(decision.get("candidate_evidence", {}).get(candidate.candidate_id, {}), dict)
+                    else []
+                ),
             }
         )
     return entries
@@ -115,26 +138,44 @@ def render_final(
     artifacts: EvidenceArtifacts,
     selected: list[str],
     uncertain: list[str],
+    decision: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """渲染最终高风险/待复核方框，并返回仅含高风险框的二值掩膜。"""
 
     result = image.copy()
     mask = np.zeros(image.shape[:2], dtype=np.uint8)
     candidates = _candidate_map(artifacts)
+    type_labels = {
+        "whole_character_overlay": "OVERLAY",
+        "added_stroke": "ADD",
+        "removed_stroke": "REMOVE",
+        "mixed_stroke_edit": "MIXED",
+    }
+
+    def label_for(candidate_id: str, fallback: str) -> str:
+        types = (
+            decision.get("candidate_forgery_types", {}).get(candidate_id, [])
+            if isinstance(decision, dict)
+            and isinstance(decision.get("candidate_forgery_types"), dict)
+            else []
+        )
+        labels = [type_labels[value] for value in types if value in type_labels]
+        return "+".join(labels) if labels else fallback
+
     for candidate_id in uncertain:
         candidate = candidates.get(candidate_id)
         if candidate is None:
             continue
         x1, y1, x2, y2 = candidate.bbox
         cv2.rectangle(result, (x1, y1), (x2, y2), (0, 165, 255), 3, cv2.LINE_AA)
-        cv2.putText(result, f"REVIEW {candidate_id}/S{candidate.slot}", (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 80, 255), 2, cv2.LINE_AA)
+        cv2.putText(result, f"REVIEW-{label_for(candidate_id, 'TAMPER')} {candidate_id}/S{candidate.slot}", (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 80, 255), 2, cv2.LINE_AA)
     for candidate_id in selected:
         candidate = candidates.get(candidate_id)
         if candidate is None:
             continue
         x1, y1, x2, y2 = candidate.bbox
         cv2.rectangle(result, (x1, y1), (x2, y2), (0, 0, 255), 4, cv2.LINE_AA)
-        cv2.putText(result, f"SUSPECT {candidate_id}/S{candidate.slot}", (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(result, f"{label_for(candidate_id, 'SUSPECT')} {candidate_id}/S{candidate.slot}", (x1, max(20, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 255), 2, cv2.LINE_AA)
         cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
     return result, mask
 
@@ -152,7 +193,7 @@ def write_analysis_outputs(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     selected = [str(value) for value in decision.get("selected_candidates", [])]
     uncertain = [str(value) for value in decision.get("uncertain_candidates", [])]
-    final_marked, candidate_mask = render_final(image, artifacts, selected, uncertain)
+    final_marked, candidate_mask = render_final(image, artifacts, selected, uncertain, decision)
     paths = {
         "input": output_dir / "01_input_rectified.jpg",
         "candidates": output_dir / "02_candidate_overlay.jpg",
@@ -196,8 +237,9 @@ def write_analysis_outputs(
         artifacts, decision, uncertain, confidence_level="medium"
     )
     report = {
-        "schema_version": 2,
-        "method": "sticker_agent_v8_multichannel_ownership" if trajectory else "sticker_local_v8_multichannel_ownership",
+        "schema_version": 3,
+        "method": "physical_tamper_agent_v9_stroke" if trajectory else "sticker_local_v8_multichannel_ownership",
+        "scope": ["whole_character_overlay", "added_stroke", "removed_stroke", "mixed_stroke_edit"] if trajectory else ["whole_character_overlay"],
         "decision": decision.get("decision", "unassessable"),
         "selected_candidates": selected,
         "uncertain_candidates": uncertain,
@@ -236,6 +278,7 @@ def write_analysis_outputs(
         "unassessable_reason": decision.get("unassessable_reason"),
         "decision_note": decision.get("decision_note", "大模型裁决仍需用人工真值校准，不能解释为司法结论"),
         "suppressed_adjacent_spillover": decision.get("suppressed_adjacent_spillover", {}),
+        "decision_profile": decision.get("decision_profile"),
     }
     paths["report"].write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if trajectory is not None:

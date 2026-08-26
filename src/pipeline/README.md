@@ -1,6 +1,6 @@
-# 统一号牌贴片筛查流水线
+# 统一号牌物理变造筛查流水线
 
-该模块把项目中正式推荐的本地四关键点号牌定位、确定性贴片候选生成和云端多轮智能体复核串联起来。输入为包含一块号牌的整车图片。默认贴牌判断路线为 `agent`；`local` 只作为显式选择的本地诊断基线。
+该模块把四关键点号牌定位、透视归一化、确定性物理证据和多轮视觉模型复核串联起来。默认 `agent` 路线覆盖整字符贴片、增加笔画、消除笔画和一增一消；`local` 仍只作为整字符贴片诊断基线。
 
 每个成功样本目录严格包含六张图：
 
@@ -18,6 +18,14 @@ source /home/huihuangyue/.venvs/lisence-plate-forgery/bin/activate
 source local_env.sh
 python -m src.pipeline.batch_test data/raw/images --count 20 --output outputs
 ```
+
+高召回工作点默认启用，也可显式声明：
+
+```bash
+export STICKER_AGENT_DECISION_PROFILE=high_recall
+```
+
+它以召回率不低于95%、查准率尽量不降且底线约70%为校准目标。是否达到目标只能由独立人工标注集的 `metrics.json` 判定，不能由处理成功数或模型自报置信度推断。
 
 指定随机种子可以精确复现抽样：
 

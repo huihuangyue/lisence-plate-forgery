@@ -211,6 +211,10 @@ def test_character_json_maps_selected_candidate_to_slot_and_visible_character() 
             "recognition_status": "cross_review_consensus",
             "bbox": list(c3.bbox),
             "confidence_level": "high",
+            "tamper_types": [],
+            "possible_original_characters": [],
+            "stroke_regions": [],
+            "stroke_hypotheses": [],
         }
     ]
 
